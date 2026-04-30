@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
         "Cache-Control": "no-cache",
       },
     });
-} catch (err) {
+  } catch (err) {
     console.error("Roast API error:", err);
 
     // Try to extract a more useful message from Gemini's error
@@ -124,4 +124,4 @@ export async function POST(req: NextRequest) {
       { status, headers: { "Content-Type": "application/json" } }
     );
   }
- 
+}
