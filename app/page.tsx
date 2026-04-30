@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 
 // ============================================================
@@ -46,17 +46,74 @@ const PERSONAS = [
 ] as const;
 
 type PersonaKey = typeof PERSONAS[number]["key"];
+type InputMode = "text" | "pdf";
 
 export default function Home() {
+  const [inputMode, setInputMode] = useState<InputMode>("text");
   const [pitch, setPitch] = useState("");
   const [persona, setPersona] = useState<PersonaKey>("veteran_vc");
   const [roast, setRoast] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // PDF upload state
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfExtracting, setPdfExtracting] = useState(false);
+  const [pdfText, setPdfText] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // The actual content we'll send to the roast API:
+  // typed text in "text" mode, extracted PDF text in "pdf" mode
+  const submissionContent = inputMode === "text" ? pitch : pdfText;
+  const submissionContentLength = submissionContent.trim().length;
+  const canSubmit = submissionContentLength >= 50 && !loading && !pdfExtracting;
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setError("");
+    setRoast("");
+    setPdfText("");
+    setPdfFile(file);
+    setPdfExtracting(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch("/api/extract-pdf", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to extract PDF.");
+      }
+
+      setPdfText(data.text);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to process PDF.");
+      setPdfFile(null);
+    } finally {
+      setPdfExtracting(false);
+    }
+  }
+
+  function clearPdf() {
+    setPdfFile(null);
+    setPdfText("");
+    setError("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
   async function handleRoast() {
-    if (pitch.trim().length < 50) {
-      setError("Please enter at least 50 characters of pitch content.");
+    if (submissionContentLength < 50) {
+      setError("Please provide at least 50 characters of pitch content.");
       return;
     }
 
@@ -68,7 +125,7 @@ export default function Home() {
       const res = await fetch("/api/roast", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pitch, persona }),
+        body: JSON.stringify({ pitch: submissionContent, persona }),
       });
 
       if (!res.ok) {
@@ -94,7 +151,7 @@ export default function Home() {
     }
   }
 
-  // Split roast on the verdict marker — clean, robust, no regex gymnastics
+  // Split roast on the verdict marker
   const VERDICT_MARKER = "---VERDICT-END---";
   let verdictText: string | null = null;
   let restOfRoast: string = roast;
@@ -169,39 +226,145 @@ export default function Home() {
             </div>
           </section>
 
-          {/* Input */}
+          {/* Input — tabs for text vs PDF */}
           <section className="mb-8">
-            <label className="block text-sm font-medium mb-3 text-zinc-300">
-              Paste your pitch
-            </label>
-            <div className="relative">
-              <textarea
-                value={pitch}
-                onChange={(e) => setPitch(e.target.value)}
-                placeholder="Describe your startup, the problem, the solution, the market, traction, team, and ask. The more detail you give, the sharper the roast."
-                className="w-full h-64 bg-zinc-900/80 border border-zinc-800 rounded-xl p-5 text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/30 resize-none transition-all"
-                disabled={loading}
-              />
-            </div>
-            <div className="flex items-center justify-between mt-4">
-              <span className="text-xs text-zinc-500">
-                {pitch.length} characters {pitch.length < 50 && pitch.length > 0 && "(min 50)"}
-              </span>
+            {/* Tabs */}
+            <div className="flex gap-1 mb-3 bg-zinc-900/50 border border-zinc-800 rounded-lg p-1 w-fit">
               <button
-                onClick={handleRoast}
-                disabled={loading || pitch.trim().length < 50}
-                className="bg-orange-600 hover:bg-orange-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-medium px-6 py-2.5 rounded-lg transition-all shadow-lg shadow-orange-600/20 disabled:shadow-none flex items-center gap-2"
+                onClick={() => setInputMode("text")}
+                disabled={loading || pdfExtracting}
+                className={`text-sm px-4 py-1.5 rounded-md transition-all disabled:opacity-50 ${
+                  inputMode === "text"
+                    ? "bg-zinc-800 text-zinc-100"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
               >
-                {loading ? (
-                  <>
-                    <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Roasting...
-                  </>
-                ) : (
-                  `Roast Me — ${selectedPersona.name}`
-                )}
+                Type pitch
+              </button>
+              <button
+                onClick={() => setInputMode("pdf")}
+                disabled={loading || pdfExtracting}
+                className={`text-sm px-4 py-1.5 rounded-md transition-all disabled:opacity-50 ${
+                  inputMode === "pdf"
+                    ? "bg-zinc-800 text-zinc-100"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                Upload PDF
               </button>
             </div>
+
+            {/* Text mode */}
+            {inputMode === "text" && (
+              <>
+                <textarea
+                  value={pitch}
+                  onChange={(e) => setPitch(e.target.value)}
+                  placeholder="Describe your startup, the problem, the solution, the market, traction, team, and ask. The more detail you give, the sharper the roast."
+                  className="w-full h-64 bg-zinc-900/80 border border-zinc-800 rounded-xl p-5 text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/30 resize-none transition-all"
+                  disabled={loading}
+                />
+                <div className="flex items-center justify-between mt-4">
+                  <span className="text-xs text-zinc-500">
+                    {pitch.length} characters {pitch.length < 50 && pitch.length > 0 && "(min 50)"}
+                  </span>
+                  <button
+                    onClick={handleRoast}
+                    disabled={!canSubmit}
+                    className="bg-orange-600 hover:bg-orange-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-medium px-6 py-2.5 rounded-lg transition-all shadow-lg shadow-orange-600/20 disabled:shadow-none flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Roasting...
+                      </>
+                    ) : (
+                      `Roast Me — ${selectedPersona.name}`
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* PDF mode */}
+            {inputMode === "pdf" && (
+              <>
+                {!pdfFile && !pdfExtracting && (
+                  <label className="block w-full border-2 border-dashed border-zinc-800 hover:border-orange-500/50 bg-zinc-900/50 rounded-xl p-12 text-center cursor-pointer transition-all">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      onChange={handleFileSelect}
+                      className="hidden"
+                    />
+                    <div className="text-zinc-400">
+                      <div className="text-4xl mb-3">📄</div>
+                      <div className="text-base font-medium text-zinc-200 mb-1">
+                        Click to upload your pitch deck
+                      </div>
+                      <div className="text-xs text-zinc-500">
+                        PDF only · Max 10MB · Text-based PDFs only (not scanned)
+                      </div>
+                    </div>
+                  </label>
+                )}
+
+                {pdfExtracting && (
+                  <div className="w-full border border-zinc-800 bg-zinc-900/50 rounded-xl p-12 text-center">
+                    <div className="inline-block w-6 h-6 border-2 border-orange-500/30 border-t-orange-500 rounded-full animate-spin mb-3" />
+                    <div className="text-sm text-zinc-300">Extracting text from PDF...</div>
+                  </div>
+                )}
+
+                {pdfFile && !pdfExtracting && pdfText && (
+                  <div className="w-full border border-zinc-800 bg-zinc-900/50 rounded-xl p-5">
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <div className="text-2xl flex-shrink-0">📄</div>
+                        <div className="min-w-0">
+                          <div className="font-medium text-zinc-100 truncate">
+                            {pdfFile.name}
+                          </div>
+                          <div className="text-xs text-zinc-500 mt-0.5">
+                            {(pdfFile.size / 1024).toFixed(0)} KB · {pdfText.length.toLocaleString()} characters extracted
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={clearPdf}
+                        disabled={loading}
+                        className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors flex-shrink-0"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <div className="text-xs text-zinc-500 bg-zinc-950/50 border border-zinc-800 rounded p-3 max-h-32 overflow-y-auto leading-relaxed">
+                      {pdfText.slice(0, 500)}
+                      {pdfText.length > 500 && "..."}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end mt-4">
+                  <button
+                    onClick={handleRoast}
+                    disabled={!canSubmit}
+                    className="bg-orange-600 hover:bg-orange-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-medium px-6 py-2.5 rounded-lg transition-all shadow-lg shadow-orange-600/20 disabled:shadow-none flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Roasting...
+                      </>
+                    ) : (
+                      `Roast Me — ${selectedPersona.name}`
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
+
             {error && (
               <p className="mt-4 text-sm text-red-400 bg-red-950/30 border border-red-900/50 rounded-lg px-4 py-3">
                 {error}
