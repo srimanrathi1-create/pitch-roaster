@@ -99,11 +99,29 @@ export async function POST(req: NextRequest) {
         "Cache-Control": "no-cache",
       },
     });
-  } catch (err) {
+} catch (err) {
     console.error("Roast API error:", err);
+
+    // Try to extract a more useful message from Gemini's error
+    let userMessage = "Something went wrong. Try again in a moment.";
+    let status = 500;
+
+    const errString = err instanceof Error ? err.message : String(err);
+
+    if (errString.includes("503") || errString.includes("UNAVAILABLE") || errString.includes("overloaded") || errString.includes("high demand")) {
+      userMessage = "🔥 Gemini is overloaded right now (free tier is busy). Wait 30 seconds and try again.";
+      status = 503;
+    } else if (errString.includes("429") || errString.includes("RESOURCE_EXHAUSTED") || errString.includes("quota")) {
+      userMessage = "Daily quota reached. Try again tomorrow or contact the site owner.";
+      status = 429;
+    } else if (errString.includes("API_KEY") || errString.includes("PERMISSION_DENIED") || errString.includes("invalid")) {
+      userMessage = "API configuration issue. Site owner needs to check setup.";
+      status = 500;
+    }
+
     return new Response(
-      JSON.stringify({ error: "Something went wrong generating the roast." }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
+      JSON.stringify({ error: userMessage }),
+      { status, headers: { "Content-Type": "application/json" } }
     );
   }
-}
+ 
