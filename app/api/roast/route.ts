@@ -67,14 +67,42 @@ export async function POST(req: NextRequest) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    const stream = await ai.models.generateContentStream({
-      model: "gemini-2.5-flash",
-      contents: pitch,
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        temperature: 0.9,
-      },
-    });
+    // Retry logic for transient 503 errors from Gemini's free tier
+    async function callGeminiWithRetry(maxAttempts = 3) {
+      let lastError: unknown;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          return await ai.models.generateContentStream({
+            model: "gemini-2.5-flash",
+            contents: pitch,
+            config: {
+              systemInstruction: SYSTEM_PROMPT,
+              temperature: 0.9,
+            },
+          });
+        } catch (err) {
+          lastError = err;
+          const errString = err instanceof Error ? err.message : String(err);
+          const isRetryable = errString.includes("503") ||
+                              errString.includes("UNAVAILABLE") ||
+                              errString.includes("overloaded");
+
+          if (!isRetryable || attempt === maxAttempts) {
+            throw err;
+          }
+
+          // Wait before retrying: 1s, 2s, 4s (exponential backoff)
+          const delayMs = 1000 * Math.pow(2, attempt - 1);
+          console.log(`Gemini 503 on attempt ${attempt}, retrying in ${delayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+
+      throw lastError;
+    }
+
+    const stream = await callGeminiWithRetry();
 
     const encoder = new TextEncoder();
     const readable = new ReadableStream({
